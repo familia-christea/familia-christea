@@ -1401,7 +1401,7 @@ function scheduleAgendaNotifications(){
   if(!window._swReg||Notification.permission!=="granted")return;
   var td=new Date().getDay();
   var nowM=nowMin_();
-  var url=window.location.origin;
+  var url=window.location.href.split("?")[0];
 
   (S.agenda||[]).forEach(function(item){
     if(!item.days.includes(td))return;
@@ -2225,7 +2225,7 @@ function requestNotificationPermission(){
 function registerServiceWorker(){
   if(!("serviceWorker" in navigator)||!navigator.serviceWorker)return;
   try{
-  navigator.serviceWorker.register("/sw.js", {scope:"/"})
+  navigator.serviceWorker.register("sw.js", {scope:"./"})
     .then(function(reg){
       window._swReg = reg;
       console.log("SW registered OK");
