@@ -1473,36 +1473,57 @@ function getAgendaStatus(item){
   return "done";
 }
 
+function showNativeNotif(title, body, tag, actions, payload){
+  if(window._swReg && window._swReg.active && Notification.permission==="granted"){
+    window._swReg.active.postMessage({
+      type:"SCHEDULE",title:title,body:body,tag:tag,delay:0,
+      actions:actions,payload:payload
+    });
+    return;
+  }
+  if(Notification.permission==="granted"){
+    try{
+      var n=new Notification(title,{
+        body:body,tag:tag,requireInteraction:true,
+        vibrate:[300,150,300,150,300]
+      });
+      n.onclick=function(){window.focus();if(payload&&payload.agendaId){UI.tab="agenda";render();}};
+    }catch(e){}
+  }
+}
+
 function checkAgendaAlerts(){
   var td=new Date().getDay();
   var now=nowMin();
   (S.agenda||[]).forEach(function(item){
     if(!item.days.includes(td))return;
     var start=timeToMin(item.startH,item.startM);
-    var end=start+item.dur;
+    var end_time=start+item.dur;
     var dk=new Date().toISOString().slice(0,10);
     var doneKey=dk+"_"+item.id;
+    var whoName=item.who==="vit"?"Vitoria":item.who==="ped"?"Pedro":"Vitoria e Pedro";
+    var endT=addMin(item.startH,item.startM,item.dur);
 
-    // 5 min warning
     var warnKey="warn_"+doneKey;
     if(now===start-5&&!_agendaAlerted[warnKey]){
       _agendaAlerted[warnKey]=true;
       playSound("task");
-      showBanner("Em 5 min: "+item.icon+" "+item.name+" ("+fmtTime(item.startH,item.startM)+")", item.color||"#667eea");
+      showBanner("Em 5 min: "+item.icon+" "+item.name,item.color||"#667eea");
+      showNativeNotif("Em 5 min: "+item.name,whoName+" | Comeca as "+fmtTime(item.startH,item.startM),"warn_"+item.id,[{action:"ok",title:"Entendido!"}],{agendaId:item.id,notifType:"warn"});
     }
-    // Start alert
     var startKey="start_"+doneKey;
     if(now===start&&!_agendaAlerted[startKey]){
       _agendaAlerted[startKey]=true;
       playSound("daily");
-      showBanner("Hora de: "+item.icon+" "+item.name+"!", item.color||"#667eea");
+      showBanner("HORA DE: "+item.icon+" "+item.name+"!",item.color||"#667eea");
+      showNativeNotif(item.icon+" HORA DE: "+item.name+"!",whoName+" | "+fmtDur(item.dur)+" | Termina as "+fmtTime(endT.h,endT.m),"start_"+item.id,[{action:"started",title:"Iniciou!"},{action:"snooze",title:"Adiar 5min"}],{agendaId:item.id,notifType:"start",dur:item.dur});
     }
-    // End alert
     var endKey="end_"+doneKey;
-    if(now===end&&!_agendaAlerted[endKey]){
+    if(now===end_time&&!_agendaAlerted[endKey]){
       _agendaAlerted[endKey]=true;
       playSound("negative");
-      showBanner("Terminou: "+item.icon+" "+item.name, "#888");
+      showBanner("TERMINOU: "+item.icon+" "+item.name,"#888");
+      showNativeNotif(item.icon+" TERMINOU: "+item.name,whoName+" | A atividade foi concluida?","end_"+item.id,[{action:"done",title:"Concluido!"},{action:"moretime",title:"Mais 15min"}],{agendaId:item.id,notifType:"end"});
     }
   });
 }
@@ -1512,7 +1533,7 @@ function startAgendaTimer(){
   _agendaInterval=setInterval(function(){
     checkAgendaAlerts();
     if(UI.tab==="agenda")render();
-  },30000); // check every 30s
+  },10000); // check every 30s
 }
 
 function buildAgendaEditModal(item){
@@ -2225,18 +2246,25 @@ function requestNotificationPermission(){
 function registerServiceWorker(){
   if(!("serviceWorker" in navigator)||!navigator.serviceWorker)return;
   try{
-  navigator.serviceWorker.register("sw.js", {scope:"./"})
+  var swPath = window.location.pathname.replace(/\/[^\/]*$/, "/sw.js");
+  navigator.serviceWorker.register(swPath, {scope: window.location.pathname.replace(/\/[^\/]*$/, "/")})
     .then(function(reg){
       window._swReg = reg;
-      console.log("SW registered OK");
+      console.log("SW registered OK at scope:", reg.scope);
+      // Wait for SW to be active
+      if(reg.active){
+        window._swReady = true;
+      }
+      reg.addEventListener("updatefound", function(){
+        reg.installing && reg.installing.addEventListener("statechange", function(){
+          if(this.state === "activated") window._swReady = true;
+        });
+      });
       // Listen for messages from SW
       navigator.serviceWorker.addEventListener("message", function(e){
         if(!e.data) return;
         if(e.data.type === "NOTIF_ACTION"){
           handleNotificationAction(e.data.action, e.data.payload);
-        }
-        if(e.data.type === "NOTIF_DISMISSED"){
-          console.log("Notif dismissed:", e.data.payload);
         }
       });
     })
