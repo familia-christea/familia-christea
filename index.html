@@ -71,6 +71,7 @@ button:active{opacity:.8}
 .modal{background:#fff;border-radius:24px;padding:24px;width:100%;max-width:380px;max-height:90vh;overflow-y:auto}
 .inp{width:100%;padding:9px 12px;border-radius:12px;border:2px solid #e8e8e8;font-family:Nunito,sans-serif;font-size:14px;font-weight:700;outline:none;margin-top:4px}
 .lbl{font-size:12px;font-weight:800;color:#666;display:block;margin-top:12px}
+body.tv{margin:0;max-width:100%;background:linear-gradient(135deg,#0f0c29,#302b63,#24243e);min-height:100vh;overflow:hidden;}
 </style>
 </head>
 <body>
@@ -2123,6 +2124,100 @@ function buildMonthly(parent){
   });
 }
 
+// TV RENDER
+function renderTV(){
+  document.body.className="tv";
+  var root=document.getElementById("root");
+  while(root.firstChild)root.removeChild(root.firstChild);
+  if(!S.monthDone)S.monthDone={};
+  var vp=vPts(),pp=pPts(),vg=vGoal(),pg=pGoal();
+  var td=today();
+  var todayTasks=tasksForDay(td);
+  var DAYS_PT=["Domingo","Segunda-feira","Terca-feira","Quarta-feira","Quinta-feira","Sexta-feira","Sabado"];
+  var wrap=div("display:flex;flex-direction:column;height:100vh");
+
+  // HEADER
+  var hdr=div("background:linear-gradient(135deg,#FF6B9D,#c94080);padding:20px 60px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;box-shadow:0 4px 30px rgba(255,107,157,.4)");
+  var htitle=div("color:white;font-size:56px;letter-spacing:2px;line-height:1");htitle.className="fr";
+  htitle.textContent=E.trophy+" Casa dos Campeoes";
+  var hright=div("text-align:right");
+  var hdate=div("color:rgba(255,255,255,.9);font-size:26px;font-weight:800");
+  hdate.textContent=DAYS_PT[td]+" | "+new Date().toLocaleDateString("pt-BR",{day:"numeric",month:"long",year:"numeric"});
+  var hclock=div("color:white;font-size:40px;font-weight:800;margin-top:4px");hclock.className="fr";hclock.id="tv-clock";
+  hright.appendChild(hdate);hright.appendChild(hclock);
+  hdr.appendChild(htitle);hdr.appendChild(hright);
+  wrap.appendChild(hdr);
+
+  // HERO CARDS
+  var cards=div("display:grid;grid-template-columns:1fr 1fr;gap:30px;padding:24px 60px;flex-shrink:0");
+  function tvCard(name,age,avatar,pts,goal,color,who){
+    var myTasks=todayTasks.filter(function(t){return t.who===who||t.who==="both";});
+    var doneCnt=myTasks.filter(function(t){return isDone(t.id);}).length;
+    var p=pct(pts,goal);
+    var card=div("background:rgba(255,255,255,.07);border-radius:28px;padding:28px;border:2px solid "+color+"55;display:flex;align-items:center;gap:30px;box-shadow:0 8px 40px "+color+"22");
+    // Avatar - fixed size circle, object-fit cover, no distortion
+    var imgWrap=div("width:160px;height:160px;border-radius:50%;overflow:hidden;border:5px solid "+color+";box-shadow:0 0 40px "+color+"66;flex-shrink:0;background:"+color+"22");
+    var im=document.createElement("img");
+    im.src=avatar;im.style.cssText="width:100%;height:100%;object-fit:cover;object-position:center top;display:block";
+    imgWrap.appendChild(im);
+    var info=div("flex:1;min-width:0");
+    var nm=div("font-size:54px;color:"+color+";line-height:1.1");nm.className="fr";nm.textContent=name;
+    var ag=div("font-size:20px;font-weight:800;color:rgba(255,255,255,.5);margin-top:2px");ag.textContent=age;
+    var lv=div("display:inline-block;background:"+color+";color:white;font-size:18px;font-weight:800;padding:6px 18px;border-radius:999px;margin:8px 0 4px");lv.textContent=lvl(pts/goal);
+    var ptsRow=div("display:flex;align-items:baseline;gap:8px;margin-top:4px");
+    var ptsN=div("font-size:76px;color:"+color+";line-height:1");ptsN.className="fr";ptsN.textContent=String(pts);
+    var ptsL=div("font-size:22px;color:rgba(255,255,255,.4);font-weight:700");ptsL.textContent="pontos hoje";
+    ptsRow.appendChild(ptsN);ptsRow.appendChild(ptsL);
+    var barBg=div("background:rgba(255,255,255,.1);border-radius:999px;height:14px;overflow:hidden;margin:12px 0 6px");
+    var barFill=div("height:100%;border-radius:999px;background:linear-gradient(90deg,"+color+"88,"+color+")");barFill.style.width=p+"%";barBg.appendChild(barFill);
+    var barInfo=div("display:flex;justify-content:space-between;font-size:18px;font-weight:800;margin-bottom:12px");
+    var bil=div("color:"+color);bil.textContent=pts+" pts";
+    var bir=div("color:rgba(255,255,255,.35)");bir.textContent="meta "+goal+" pts | "+p+"%";
+    barInfo.appendChild(bil);barInfo.appendChild(bir);
+    var badge=div("background:rgba(255,255,255,.08);border-radius:14px;padding:12px 18px;display:flex;justify-content:space-between;align-items:center");
+    var badgeL=div("font-size:20px;font-weight:800;color:rgba(255,255,255,.6)");badgeL.textContent="Tarefas concluidas";
+    var badgeR=div("font-size:36px;font-weight:800;color:"+(doneCnt===myTasks.length&&myTasks.length>0?"#4CAF50":color));badgeR.className="fr";badgeR.textContent=doneCnt+"/"+myTasks.length;
+    badge.appendChild(badgeL);badge.appendChild(badgeR);
+    info.appendChild(nm);info.appendChild(ag);info.appendChild(lv);info.appendChild(ptsRow);info.appendChild(barBg);info.appendChild(barInfo);info.appendChild(badge);
+    card.appendChild(imgWrap);card.appendChild(info);
+    return card;
+  }
+  cards.appendChild(tvCard("Vitoria","10 anos",VA,vp,vg,"#FF6B9D","vit"));
+  cards.appendChild(tvCard("Pedro","5 anos",PA,pp,pg,"#4ECDC4","ped"));
+  wrap.appendChild(cards);
+
+  // TASKS
+  var tsec=div("flex:1;padding:0 60px;overflow:hidden;display:flex;flex-direction:column;min-height:0");
+  var ttitle=div("font-size:26px;font-weight:800;color:rgba(255,255,255,.6);margin-bottom:12px");ttitle.textContent="Tarefas de Hoje";
+  tsec.appendChild(ttitle);
+  var tgrid=div("display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px;overflow:hidden");
+  todayTasks.forEach(function(t){
+    var done2=isDone(t.id);
+    var wc=t.who==="vit"?"#FF6B9D":t.who==="ped"?"#4ECDC4":"#FFB800";
+    var tc=div("background:rgba(255,255,255,"+(done2?"0.13":"0.05")+");border-radius:14px;padding:14px 18px;display:flex;align-items:center;gap:14px;border:2px solid "+(done2?wc+"88":"rgba(255,255,255,.08)")+";opacity:"+(done2?"1":"0.65"));
+    var ti=div("font-size:30px;flex-shrink:0");ti.textContent=t.icon;
+    var tinfo=div("flex:1;min-width:0");
+    var tn=div("font-size:20px;font-weight:800;color:white;text-decoration:"+(done2?"line-through":"none")+";white-space:nowrap;overflow:hidden;text-overflow:ellipsis");tn.textContent=t.name;
+    var tw=div("font-size:15px;font-weight:700;color:"+wc+";margin-top:2px");tw.textContent=(t.who==="vit"?"Vitoria":t.who==="ped"?"Pedro":"Ambos")+" | "+t.pts+" pts";
+    tinfo.appendChild(tn);tinfo.appendChild(tw);
+    var tck=div("font-size:26px;flex-shrink:0");tck.textContent=done2?"\u2705":"\u23F3";
+    tc.appendChild(ti);tc.appendChild(tinfo);tc.appendChild(tck);
+    tgrid.appendChild(tc);
+  });
+  tsec.appendChild(tgrid);wrap.appendChild(tsec);
+
+  // FOOTER
+  var foot=div("padding:12px 60px;background:rgba(0,0,0,.5);display:flex;justify-content:space-between;align-items:center;flex-shrink:0");
+  var fl=div("font-size:18px;color:rgba(255,255,255,.4);font-weight:700");fl.textContent="Atualiza a cada 30 segundos";
+  var fr3=div("font-size:18px;color:rgba(255,255,255,.4);font-weight:700");fr3.textContent="familia-christea.github.io/familia-christea";
+  foot.appendChild(fl);foot.appendChild(fr3);wrap.appendChild(foot);
+  root.appendChild(wrap);
+
+  // Live clock
+  function tick(){var c=document.getElementById("tv-clock");if(c)c.textContent=new Date().toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit",second:"2-digit"});}
+  tick();setInterval(tick,1000);
+}
+
 // NAV
 function setTab(t){UI.tab=t;if(t==="tasks"){UI.sub="today";UI.selDay=today();}render();}
 function setSub(s){UI.sub=s;render();}
@@ -2253,8 +2348,15 @@ checkMonthReset();
 // INIT - wrapped in DOMContentLoaded to ensure all functions are defined
 window.addEventListener("DOMContentLoaded", function(){
   loadLocal();
-  render();
-  startAgendaTimer();
+  var _tvP=new URLSearchParams(window.location.search);
+  window._tvMode=_tvP.get("tv")==="1";
+  if(window._tvMode){
+    renderTV();
+    setInterval(function(){cloudLoad();setTimeout(renderTV,500);},30000);
+  } else {
+    render();
+    startAgendaTimer();
+  }
   // SW and notifications with safety check
   if("serviceWorker" in navigator){
     registerServiceWorker();
