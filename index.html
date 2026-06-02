@@ -314,7 +314,13 @@ function dot(show){var el=document.getElementById("sdot");if(el)el.style.display
 
 // HELPERS
 function today(){return new Date().getDay();}
-function todayKey(){return new Date().toISOString().slice(0,10);}
+function todayKey(){
+  var d=new Date();
+  var y=d.getFullYear();
+  var m=String(d.getMonth()+1).padStart(2,"0");
+  var day=String(d.getDate()).padStart(2,"0");
+  return y+"-"+m+"-"+day;
+}
 function isDone(id){var h=S.history[todayKey()];return !!(h&&h[id]);}
 function todayDone(){return S.history[todayKey()]||{};}
 function tasksForDay(d){return S.tasks.filter(function(t){return t.days&&t.days.includes(d);});}
@@ -2097,41 +2103,44 @@ function buildNegatives(parent){
 function buildMonthly(parent){
   var now2=new Date();
   var curYear=now2.getFullYear();
-  var curMonth=now2.getMonth(); // 0-based
+  var curMonth=now2.getMonth();
   var curMK2=curYear+"-"+String(curMonth+1).padStart(2,"0");
   var MONTH_NAMES=["Janeiro","Fevereiro","Marco","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
 
   var ttl=div("font-size:18px;color:#888;margin-bottom:12px");ttl.className="fr";ttl.textContent="Historico Mensal";
   parent.appendChild(ttl);
 
-  // Group history by month - only count days within that calendar month
   var monthMap={};
   monthMap[curMK2]={vPts:0,pPts:0,vTasks:0,pTasks:0,days:0,daysSet:{}};
 
   Object.keys(S.history).sort().forEach(function(dateKey){
-       // Validate date format
-    if(!dateKey||dateKey.length!==10||dateKey.charAt(4)!=='-'||dateKey.charAt(7)!=='-')return;
-    var d=new Date(dateKey+"T12:00:00");
-    if(isNaN(d.getTime()))return;
-    var y=d.getFullYear();
-    var m=d.getMonth();
-    var mk=y+"-"+String(m+1).padStart(2,"0");
-    // Skip future months
-    if(mk>curMK2)return;
-
+    if(!dateKey||dateKey.length!==10||dateKey.charAt(4)!=="-"||dateKey.charAt(7)!=="-")return;
     var dm=S.history[dateKey];
     if(!dm||typeof dm!=="object")return;
-    // Only count if at least one task was done
     var anyDone=Object.keys(dm).some(function(k){return dm[k]===true;});
     if(!anyDone)return;
 
+    // Parse date parts directly (no timezone issues)
+    var parts=dateKey.split("-");
+    var y=parseInt(parts[0]);
+    var m=parseInt(parts[1]);
+    var mk=y+"-"+String(m).padStart(2,"0");
+
+    // Skip future months
+    if(mk>curMK2)return;
+
     if(!monthMap[mk])monthMap[mk]={vPts:0,pPts:0,vTasks:0,pTasks:0,days:0,daysSet:{}};
-    // Count each calendar day only once
+
+    // Count unique days only
     if(!monthMap[mk].daysSet[dateKey]){
       monthMap[mk].daysSet[dateKey]=true;
       monthMap[mk].days++;
     }
-    var di=d.getDay();
+
+    // Get day of week for task filtering
+    var d2=new Date(y,m-1,parseInt(parts[2]));
+    var di=d2.getDay();
+
     S.tasks.forEach(function(t){
       if(!dm[t.id])return;
       if(!t.days||!t.days.includes(di))return;
@@ -2175,8 +2184,9 @@ function buildMonthly(parent){
     });
     card.appendChild(srow);
 
+    var daysLabel=m.days===1?"1 dia com atividade":m.days+" dias com atividade";
     var foot2=div("display:flex;justify-content:space-between;font-size:12px;font-weight:700;color:#aaa");
-    foot2.appendChild(span("",m.days+(m.days===1?" dia":" dias")+" com atividade"));
+    foot2.appendChild(span("",daysLabel));
     foot2.appendChild(span("","Total: "+(m.vPts+m.pPts)+" pts"));
     card.appendChild(foot2);
     parent.appendChild(card);
@@ -2286,183 +2296,205 @@ function setHist(key,di,label){UI.histDay={key:key,di:di,label:label};render();}
 
 // RECADOS
 function buildRecados(parent){
-  var notes=JSON.parse(localStorage.getItem("christea_notes")||"[]");
-  var unread=parseInt(localStorage.getItem("christea_notes_read")||"0");
-  var hasNew=notes.length>unread;
+  var PHOTOS_URL="https://photos.app.goo.gl/j2FWwLGZM58bACm38";
+  var notes=[];
+  try{notes=JSON.parse(localStorage.getItem("christea_notes")||"[]");}catch(e){}
+  var readCount=parseInt(localStorage.getItem("christea_notes_read")||"0");
+  if(notes.length>readCount)localStorage.setItem("christea_notes_read",String(notes.length));
 
-  // Header
+  var AUTHOR_COLORS={"Pai":"#667eea","Mae":"#FF6B9D","Vitoria":"#FFB800","Pedro":"#4ECDC4"};
+  var AUTHOR_EMOJIS={"Pai":"\uD83D\uDC68","Mae":"\uD83D\uDC69","Vitoria":"\uD83D\uDC78","Pedro":"\uD83E\uDDB8"};
+  var POST_TYPES={
+    "recado":  {label:"Recado",   icon:"\uD83D\uDCAC", color:"#667eea"},
+    "conquista":{label:"Conquista",icon:"\uD83C\uDFC6", color:"#FFB800"},
+    "parabens": {label:"Parabens", icon:"\uD83C\uDF89", color:"#FF6B9D"},
+    "lembrete": {label:"Lembrete", icon:"\uD83D\uDCCC", color:"#4ECDC4"},
+    "amor":     {label:"Amor",     icon:"\u2764\uFE0F",  color:"#e44"}
+  };
+  var REACTIONS=["\u2764\uFE0F","\uD83D\uDC4F","\uD83D\uDE02","\uD83D\uDE32","\uD83D\uDD25","\uD83C\uDF89"];
+
+  // ── HEADER ──
   var hdr=div("display:flex;justify-content:space-between;align-items:center;margin-bottom:14px");
-  var htitle=div("font-size:18px;color:#888");htitle.className="fr";htitle.textContent="Recados da Familia";
-  if(hasNew){
-    var badge2=div("background:#FF6B9D;color:white;font-size:11px;font-weight:800;padding:3px 10px;border-radius:999px");
-    badge2.textContent=String(notes.length-unread)+" novo(s)";hdr.appendChild(htitle);hdr.appendChild(badge2);
-  } else {
-    hdr.appendChild(htitle);
-  }
-  // Mark as read
-  localStorage.setItem("christea_notes_read",String(notes.length));
+  var htitle=div("font-size:20px;color:#667eea");htitle.className="fr";htitle.textContent="\uD83D\uDC68\u200D\uD83D\uDC69\u200D\uD83D\uDC67\u200D\uD83D\uDC66 Familia Christea";
+  // Google Photos button
+  var gpBtn=btn("display:flex;align-items:center;gap:6px;padding:8px 14px;border-radius:999px;border:none;background:linear-gradient(135deg,#4285F4,#34A853);color:white;font-weight:800;font-size:13px","\uD83D\uDCF8 Fotos",function(){window.open(PHOTOS_URL,"_blank");});
+  hdr.appendChild(htitle);hdr.appendChild(gpBtn);
   parent.appendChild(hdr);
 
-  // New note form
-  var form=div("background:white;border-radius:20px;padding:16px;margin-bottom:16px;box-shadow:0 4px 20px rgba(0,0,0,.07)");
-  var ftitle=div("font-size:14px;font-weight:800;color:#555;margin-bottom:10px");ftitle.textContent="Novo Recado";
+  // ── NEW POST FORM ──
+  var form=div("background:white;border-radius:20px;padding:18px;margin-bottom:16px;box-shadow:0 4px 20px rgba(0,0,0,.08)");
 
-  // Author selector
-  var authorRow=div("display:flex;gap:8px;margin-bottom:10px");
-  var authors=[["Pai","#667eea"],["Mae","#FF6B9D"],["Vitoria","#FFB800"],["Pedro","#4ECDC4"]];
+  // Author row
+  var authorRow=div("display:flex;gap:8px;margin-bottom:12px");
   var selAuthor="Pai";
-  authors.forEach(function(a){
-    var isA=a[0]==="Pai";
-    var ab=btn("flex:1;padding:6px 4px;border-radius:10px;border:2px solid "+(isA?a[1]:"#e0e0e0")+";background:"+(isA?a[1]:"white")+";color:"+(isA?"white":"#888")+";font-weight:800;font-size:12px",a[0],function(aa){return function(e){
-      selAuthor=aa[0];
+  var selType="recado";
+  Object.keys(AUTHOR_COLORS).forEach(function(name){
+    var color=AUTHOR_COLORS[name];
+    var isA=name==="Pai";
+    var ab=btn("flex:1;padding:8px 4px;border-radius:12px;border:2px solid "+(isA?color:"#e0e0e0")+";background:"+(isA?color:"white")+";color:"+(isA?"white":"#888")+";font-weight:800;font-size:12px",AUTHOR_EMOJIS[name]+" "+name,function(n,c){return function(e){
+      selAuthor=n;
       authorRow.querySelectorAll("button").forEach(function(x){x.style.background="white";x.style.color="#888";x.style.borderColor="#e0e0e0";});
-      e.currentTarget.style.background=aa[1];e.currentTarget.style.color="white";e.currentTarget.style.borderColor=aa[1];
-    };}(a));
+      e.currentTarget.style.background=c;e.currentTarget.style.color="white";e.currentTarget.style.borderColor=c;
+    };}(name,color));
     authorRow.appendChild(ab);
   });
+  form.appendChild(authorRow);
 
-  var ta=document.createElement("textarea");
-  ta.placeholder="Escreva um recado, observacao ou lembranca...";
-  ta.style.cssText="width:100%;padding:10px 12px;border-radius:12px;border:2px solid #e8e8e8;font-family:Nunito,sans-serif;font-size:14px;font-weight:700;outline:none;resize:none;height:70px;margin-bottom:10px;display:block";
-
-  // Media buttons row
-  var mediaRow=div("display:flex;gap:8px;margin-bottom:10px;align-items:center");
-  var mediaLabel=div("font-size:12px;font-weight:700;color:#aaa");mediaLabel.textContent="Anexar:";
-  mediaRow.appendChild(mediaLabel);
-
-  // Photo button
-  var photoInput=document.createElement("input");
-  photoInput.type="file";photoInput.accept="image/*";photoInput.capture="environment";
-  photoInput.style.display="none";
-  var photoBtn=btn("padding:6px 12px;border-radius:10px;border:2px solid #e0e0e0;background:white;font-weight:800;font-size:13px","\uD83D\uDCF7 Foto",function(){photoInput.click();});
-  var photoPreview=div("font-size:12px;color:#4CAF50;font-weight:700;display:none");photoPreview.textContent="Foto selecionada!";
-  var photoData=null;
-  photoInput.onchange=function(){
-    if(photoInput.files&&photoInput.files[0]){
-      var reader=new FileReader();
-      reader.onload=function(e2){
-        photoData=e2.target.result;
-        photoPreview.style.display="block";
-        photoBtn.style.borderColor="#4CAF50";
-        photoBtn.style.color="#4CAF50";
-      };
-      reader.readAsDataURL(photoInput.files[0]);
-    }
-  };
-
-  // Audio button
-  var audioBtn=btn("padding:6px 12px;border-radius:10px;border:2px solid #e0e0e0;background:white;font-weight:800;font-size:13px","\uD83C\uDFA4 Audio",function(){
-    if(window._isRecording){
-      // Stop recording
-      window._mediaRecorder&&window._mediaRecorder.stop();
-      window._isRecording=false;
-      audioBtn.textContent="\uD83C\uDFA4 Audio";
-      audioBtn.style.borderColor="#e0e0e0";
-    } else {
-      // Start recording
-      navigator.mediaDevices&&navigator.mediaDevices.getUserMedia({audio:true}).then(function(stream){
-        window._isRecording=true;
-        audioBtn.textContent="\u23F9 Parar";audioBtn.style.borderColor="#e44";
-        var chunks=[];
-        window._mediaRecorder=new MediaRecorder(stream);
-        window._mediaRecorder.ondataavailable=function(ev){chunks.push(ev.data);};
-        window._mediaRecorder.onstop=function(){
-          var blob=new Blob(chunks,{type:"audio/webm"});
-          var reader=new FileReader();
-          reader.onload=function(e2){
-            window._audioData=e2.target.result;
-            audioPreview.style.display="block";
-            audioBtn.textContent="\uD83C\uDFA4 Audio";audioBtn.style.borderColor="#4CAF50";
-          };
-          reader.readAsDataURL(blob);
-          stream.getTracks().forEach(function(t){t.stop();});
-        };
-        window._mediaRecorder.start();
-      }).catch(function(){toast("Permissao de microfone negada");});
-    }
+  // Post type selector
+  var typeRow=div("display:flex;gap:6px;margin-bottom:12px;overflow-x:auto;padding-bottom:4px");
+  Object.keys(POST_TYPES).forEach(function(key){
+    var pt=POST_TYPES[key];
+    var isA=key==="recado";
+    var tb=btn("flex-shrink:0;padding:5px 10px;border-radius:999px;border:2px solid "+(isA?pt.color:"#e0e0e0")+";background:"+(isA?pt.color+"18":"white")+";color:"+(isA?pt.color:"#888")+";font-weight:800;font-size:11px;white-space:nowrap",pt.icon+" "+pt.label,function(k,pt2){return function(e){
+      selType=k;
+      typeRow.querySelectorAll("button").forEach(function(x){x.style.background="white";x.style.color="#888";x.style.borderColor="#e0e0e0";});
+      e.currentTarget.style.background=pt2.color+"18";e.currentTarget.style.color=pt2.color;e.currentTarget.style.borderColor=pt2.color;
+    };}(key,pt));
+    typeRow.appendChild(tb);
   });
-  var audioPreview=div("font-size:12px;color:#4CAF50;font-weight:700;display:none");audioPreview.textContent="\uD83C\uDFA4 Audio gravado!";
+  form.appendChild(typeRow);
 
-  mediaRow.appendChild(photoBtn);mediaRow.appendChild(photoInput);
-  mediaRow.appendChild(audioBtn);
-  var mediaPreviews=div("display:flex;flex-wrap:wrap;gap:6px;margin-top:4px");
-  mediaPreviews.appendChild(photoPreview);mediaPreviews.appendChild(audioPreview);
+  // Text area
+  var ta=document.createElement("textarea");
+  ta.placeholder="O que voce quer compartilhar com a familia?";
+  ta.style.cssText="width:100%;padding:12px;border-radius:14px;border:2px solid #e8e8e8;font-family:Nunito,sans-serif;font-size:15px;font-weight:600;outline:none;resize:none;height:80px;margin-bottom:12px;display:block;box-sizing:border-box";
+  form.appendChild(ta);
 
-  var sendBtn=btn("width:100%;padding:11px;border-radius:12px;border:none;background:linear-gradient(135deg,#ff6b9d,#c94080);color:white;font-family:Nunito,sans-serif;font-weight:800;font-size:14px","Enviar Recado",function(){
+  // Send button
+  var sendBtn=btn("width:100%;padding:12px;border-radius:14px;border:none;background:linear-gradient(135deg,#667eea,#764ba2);color:white;font-family:Nunito,sans-serif;font-weight:800;font-size:15px","\uD83D\uDCE8 Publicar",function(){
     var text=ta.value.trim();
-    if(!text&&!photoData&&!window._audioData){toast("Escreva algo ou anexe uma midia!");return;}
+    if(!text){toast("Escreva algo antes de publicar!");return;}
     var note={
       id:Date.now(),
       author:selAuthor,
+      type:selType,
       text:text,
-      photo:photoData||null,
-      audio:window._audioData||null,
-      date:new Date().toLocaleDateString("pt-BR",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})
+      reactions:{},
+      comments:[],
+      date:new Date().toLocaleDateString("pt-BR",{day:"numeric",month:"short"}),
+      time:new Date().toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"})
     };
     notes.unshift(note);
-    localStorage.setItem("christea_notes",JSON.stringify(notes.slice(0,50)));
+    localStorage.setItem("christea_notes",JSON.stringify(notes.slice(0,100)));
     localStorage.setItem("christea_notes_read",String(notes.length));
-    ta.value="";photoData=null;window._audioData=null;
-    photoPreview.style.display="none";audioPreview.style.display="none";
-    photoBtn.style.borderColor="#e0e0e0";photoBtn.style.color="";
-    toast("Recado enviado!");cloudSave();render();
+    ta.value="";
+    playSound("task");
+    toast(POST_TYPES[selType].icon+" Publicado!");
+    cloudSave();render();
   });
-
-  form.appendChild(ftitle);form.appendChild(authorRow);form.appendChild(ta);
-  form.appendChild(mediaRow);form.appendChild(mediaPreviews);form.appendChild(sendBtn);
+  form.appendChild(sendBtn);
   parent.appendChild(form);
 
-  // Notes list
+  // ── FEED ──
   if(notes.length===0){
-    var empty=div("text-align:center;padding:30px;color:#bbb;font-weight:700;font-size:15px");
-    empty.textContent="Nenhum recado ainda!";parent.appendChild(empty);return;
+    var empty=div("text-align:center;padding:40px 20px;background:white;border-radius:20px;box-shadow:0 4px 20px rgba(0,0,0,.07)");
+    var ei=div("font-size:48px;margin-bottom:10px");ei.textContent="\uD83D\uDC68\u200D\uD83D\uDC69\u200D\uD83D\uDC67\u200D\uD83D\uDC66";
+    var et=div("font-size:16px;color:#bbb;font-weight:700");et.textContent="Seja o primeiro a publicar!";
+    var es=div("font-size:13px;color:#ddd;font-weight:600;margin-top:6px");es.textContent="Compartilhe recados, conquistas e momentos especiais";
+    empty.appendChild(ei);empty.appendChild(et);empty.appendChild(es);
+    parent.appendChild(empty);return;
   }
 
-  notes.forEach(function(n,idx2){
-    var authorColors={"Pai":"#667eea","Mae":"#FF6B9D","Vitoria":"#FFB800","Pedro":"#4ECDC4"};
-    var authorEmojis={"Pai":"\uD83D\uDC68","Mae":"\uD83D\uDC69","Vitoria":"\uD83D\uDC78","Pedro":"\uD83E\uDDB8"};
-    var color=authorColors[n.author]||"#888";
-    var card=div("background:white;border-radius:16px;padding:14px;margin-bottom:10px;box-shadow:0 3px 14px rgba(0,0,0,.06);border-left:4px solid "+color);
-    var top=div("display:flex;justify-content:space-between;align-items:center;margin-bottom:8px");
-    var auth=div("display:flex;align-items:center;gap:6px");
-    var emoji=span("font-size:18px",authorEmojis[n.author]||"\uD83D\uDC64");
-    var aname=div("font-weight:800;font-size:14px;color:"+color);aname.textContent=n.author;
-    auth.appendChild(emoji);auth.appendChild(aname);
-    var delBtn=btn("background:none;border:none;color:#ddd;font-size:14px;padding:2px 4px","\u2715",function(nid){return function(){
-      var notes2=JSON.parse(localStorage.getItem("christea_notes")||"[]");
-      notes2=notes2.filter(function(x){return x.id!==nid;});
-      localStorage.setItem("christea_notes",JSON.stringify(notes2));
-      toast("Recado removido!");cloudSave();render();
+  notes.forEach(function(n,ni){
+    var color=AUTHOR_COLORS[n.author]||"#667eea";
+    var pt2=POST_TYPES[n.type]||POST_TYPES.recado;
+    var reactions=n.reactions||{};
+    var comments=n.comments||[];
+
+    var card=div("background:white;border-radius:20px;margin-bottom:14px;box-shadow:0 4px 20px rgba(0,0,0,.07);overflow:hidden");
+
+    // Card header
+    var cardHdr=div("padding:14px 16px 10px;display:flex;align-items:center;gap:10px");
+    var avatar=div("width:44px;height:44px;border-radius:50%;background:"+color+";display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0");
+    avatar.textContent=AUTHOR_EMOJIS[n.author]||"\uD83D\uDC64";
+    var info=div("flex:1");
+    var nameRow=div("display:flex;align-items:center;gap:6px");
+    var aname=div("font-weight:800;font-size:15px;color:#333");aname.textContent=n.author;
+    var typeBadge=div("display:inline-flex;align-items:center;gap:3px;background:"+pt2.color+"18;color:"+pt2.color+";font-size:10px;font-weight:800;padding:2px 8px;border-radius:999px");
+    typeBadge.textContent=pt2.icon+" "+pt2.label;
+    nameRow.appendChild(aname);nameRow.appendChild(typeBadge);
+    var timeDiv=div("font-size:11px;color:#bbb;font-weight:700;margin-top:2px");
+    timeDiv.textContent=(n.date||"")+" "+(n.time||"");
+    info.appendChild(nameRow);info.appendChild(timeDiv);
+    var delBtn=btn("background:none;border:none;color:#ddd;font-size:18px;flex-shrink:0;padding:4px","\u2715",function(nid){return function(){
+      var ns=[];try{ns=JSON.parse(localStorage.getItem("christea_notes")||"[]");}catch(e){}
+      ns=ns.filter(function(x){return x.id!==nid;});
+      localStorage.setItem("christea_notes",JSON.stringify(ns));
+      toast("Post removido!");cloudSave();render();
     };}(n.id));
-    var dt=div("font-size:10px;color:#bbb;font-weight:700");dt.textContent=n.date;
-    top.appendChild(auth);top.appendChild(delBtn);
-    var bot=div("margin-top:4px");bot.appendChild(dt);
+    cardHdr.appendChild(avatar);cardHdr.appendChild(info);cardHdr.appendChild(delBtn);
+    card.appendChild(cardHdr);
 
-    if(n.text){
-      var txt=div("font-size:14px;color:#444;font-weight:600;line-height:1.5;margin-bottom:8px");txt.textContent=n.text;
-      card.appendChild(top);card.appendChild(txt);
-    } else {
-      card.appendChild(top);
+    // Post text
+    var postText=div("padding:4px 16px 14px;font-size:15px;color:#333;font-weight:600;line-height:1.6;white-space:pre-wrap");
+    postText.textContent=n.text;
+    card.appendChild(postText);
+
+    // Reactions bar
+    var reactBar=div("padding:10px 16px;border-top:1px solid #f5f5f5;display:flex;align-items:center;gap:6px;flex-wrap:wrap");
+    REACTIONS.forEach(function(emoji){
+      var count=reactions[emoji]||0;
+      var rb=btn("display:flex;align-items:center;gap:3px;padding:5px 10px;border-radius:999px;border:2px solid "+(count>0?"#e0e0e0":"#f5f5f5")+";background:"+(count>0?"#f9f9f9":"white")+";font-size:16px;cursor:pointer","",function(em){return function(){
+        var ns=[];try{ns=JSON.parse(localStorage.getItem("christea_notes")||"[]");}catch(e){}
+        var found=ns.find(function(x){return x.id===n.id;});
+        if(found){
+          if(!found.reactions)found.reactions={};
+          found.reactions[em]=(found.reactions[em]||0)+1;
+          localStorage.setItem("christea_notes",JSON.stringify(ns));
+          playSound("task");cloudSave();render();
+        }
+      };}(emoji));
+      var espan=span("font-size:18px",emoji);
+      rb.appendChild(espan);
+      if(count>0){var cspan=span("font-size:12px;font-weight:800;color:#888",String(count));rb.appendChild(cspan);}
+      reactBar.appendChild(rb);
+    });
+    card.appendChild(reactBar);
+
+    // Comments section
+    if(comments.length>0){
+      var commSection=div("padding:8px 16px;border-top:1px solid #f5f5f5;background:#fafafa");
+      comments.forEach(function(c,ci){
+        var cc=div("display:flex;gap:8px;align-items:flex-start;margin-bottom:8px");
+        var ca=div("width:28px;height:28px;border-radius:50%;background:"+(AUTHOR_COLORS[c.author]||"#667eea")+";display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0");
+        ca.textContent=AUTHOR_EMOJIS[c.author]||"\uD83D\uDC64";
+        var cb=div("flex:1;background:white;border-radius:12px;padding:8px 10px;box-shadow:0 1px 4px rgba(0,0,0,.06)");
+        var cn2=span("font-size:11px;font-weight:800;color:"+(AUTHOR_COLORS[c.author]||"#667eea"),c.author+" ");
+        var ct=span("font-size:13px;font-weight:600;color:#333",c.text);
+        cb.appendChild(cn2);cb.appendChild(ct);
+        var cdel=btn("background:none;border:none;color:#ddd;font-size:12px;flex-shrink:0","\u2715",function(nid2,cid){return function(){
+          var ns=[];try{ns=JSON.parse(localStorage.getItem("christea_notes")||"[]");}catch(e){}
+          var found2=ns.find(function(x){return x.id===nid2;});
+          if(found2)found2.comments=found2.comments.filter(function(x){return x.id!==cid;});
+          localStorage.setItem("christea_notes",JSON.stringify(ns));
+          cloudSave();render();
+        };}(n.id,c.id));
+        cc.appendChild(ca);cc.appendChild(cb);cc.appendChild(cdel);
+        commSection.appendChild(cc);
+      });
+      card.appendChild(commSection);
     }
 
-    // Photo preview
-    if(n.photo){
-      var pimg=document.createElement("img");
-      pimg.src=n.photo;
-      pimg.style.cssText="width:100%;max-height:200px;object-fit:cover;border-radius:10px;margin-bottom:8px;cursor:pointer";
-      pimg.onclick=function(src2){return function(){window.open(src2,"_blank");};}(n.photo);
-      card.appendChild(pimg);
-    }
+    // Add comment input
+    var commRow=div("padding:10px 16px;border-top:1px solid #f5f5f5;display:flex;gap:8px;align-items:center");
+    var commInput=document.createElement("input");
+    commInput.type="text";commInput.placeholder="Comentar...";
+    commInput.style.cssText="flex:1;padding:8px 12px;border-radius:999px;border:2px solid #e8e8e8;font-family:Nunito,sans-serif;font-size:13px;font-weight:700;outline:none";
+    var commSend=btn("width:36px;height:36px;border-radius:50%;border:none;background:linear-gradient(135deg,#667eea,#764ba2);color:white;font-size:16px;flex-shrink:0","\uD83D\uDCAC",function(nid3,cinput){return function(){
+      var txt=cinput.value.trim();if(!txt)return;
+      var ns=[];try{ns=JSON.parse(localStorage.getItem("christea_notes")||"[]");}catch(e){}
+      var found3=ns.find(function(x){return x.id===nid3;});
+      if(found3){
+        if(!found3.comments)found3.comments=[];
+        found3.comments.push({id:Date.now(),author:selAuthor,text:txt});
+        localStorage.setItem("christea_notes",JSON.stringify(ns));
+        cinput.value="";
+        playSound("task");cloudSave();render();
+      }
+    };}(n.id,commInput));
+    commRow.appendChild(commInput);commRow.appendChild(commSend);
+    card.appendChild(commRow);
 
-    // Audio player
-    if(n.audio){
-      var aud=document.createElement("audio");
-      aud.src=n.audio;aud.controls=true;
-      aud.style.cssText="width:100%;margin-bottom:8px";
-      card.appendChild(aud);
-    }
-
-    card.appendChild(bot);
     parent.appendChild(card);
   });
 }
