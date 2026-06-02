@@ -215,7 +215,11 @@ var UI = {tab:"home",sub:"today",filter:"all",selDay:new Date().getDay(),histDay
 
 // STORAGE
 function saveLocal(){try{localStorage.setItem(SK,JSON.stringify(S));}catch(e){}}
-function loadLocal(){try{var d=JSON.parse(localStorage.getItem(SK));if(d){if(d.tasks)S.tasks=d.tasks;if(d.rewards)S.rewards=d.rewards;if(d.done)S.done=d.done;if(d.history)S.history=d.history;if(d.monthDone)S.monthDone=d.monthDone;if(d.negatives)S.negatives=d.negatives;if(d.negHistory)S.negHistory=d.negHistory;if(d.agenda)S.agenda=d.agenda;if(d.agendaDone)S.agendaDone=d.agendaDone;}}catch(e){}}
+function loadLocal(){try{var d=JSON.parse(localStorage.getItem(SK));if(d){if(d.tasks)S.tasks=d.tasks;if(d.rewards)S.rewards=d.rewards;if(d.history)S.history=d.history;if(d.monthDone)S.monthDone=d.monthDone;if(d.negatives)S.negatives=d.negatives;if(d.negHistory)S.negHistory=d.negHistory;if(d.agenda)S.agenda=d.agenda;if(d.agendaDone)S.agendaDone=d.agendaDone;
+    // Rebuild S.done from today only
+    S.done={};
+    var th=S.history[todayKey()]||{};
+    Object.keys(th).forEach(function(id){if(th[id])S.done[id]=true;});}}catch(e){}}
 
 function checkMonthReset(){
   var now = new Date();
@@ -262,7 +266,7 @@ async function cloudLoad(){
     // Always apply server data - server is source of truth
     if(d.tasks&&d.tasks.length)S.tasks=d.tasks;
     if(d.rewards&&d.rewards.length)S.rewards=d.rewards;
-    if(d.done)S.done=d.done;
+    // NEVER load S.done from server - it's derived from S.history[today]
     if(d.history)S.history=d.history;
     if(d.monthDone)S.monthDone=d.monthDone;
     if(d.negatives&&d.negatives.length)S.negatives=d.negatives;
@@ -270,9 +274,12 @@ async function cloudLoad(){
     if(d.agenda&&d.agenda.length)S.agenda=d.agenda;
     if(d.agendaDone)S.agendaDone=d.agendaDone;
     if(d.notes)localStorage.setItem("christea_notes",JSON.stringify(d.notes));
+    // Rebuild S.done from TODAY's history only
+    S.done={};
+    var todayH2=S.history[todayKey()]||{};
+    Object.keys(todayH2).forEach(function(id){if(todayH2[id])S.done[id]=true;});
     window._lastSyncTs=serverTs||Date.now();
     saveLocal();
-    // Only re-render if data actually changed
     if(serverTs>localTs||!localTs){render();}
   }catch(e){console.log("Sync error:",e);}
   dot(false);
@@ -293,7 +300,14 @@ async function cloudSave(){
   if(myQueue!==window._saveQueue){dot(false);return;}
   try{
     var notes=JSON.parse(localStorage.getItem("christea_notes")||"[]");
-    var payload=Object.assign({},S,{notes:notes,_ts:Date.now()});
+    // Build payload WITHOUT S.done (it's derived, not stored)
+    var payloadData={
+      tasks:S.tasks, rewards:S.rewards, history:S.history,
+      monthDone:S.monthDone, negatives:S.negatives, negHistory:S.negHistory,
+      agenda:S.agenda, agendaDone:S.agendaDone,
+      notes:notes, _ts:Date.now()
+    };
+    var payload=payloadData;
     var r=await fetch("https://api.jsonbin.io/v3/b/"+bin,{
       method:"PUT",
       headers:{"Content-Type":"application/json","X-Master-Key":key},
