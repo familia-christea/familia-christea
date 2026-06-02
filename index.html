@@ -246,37 +246,64 @@ function checkMonthReset(){
 async function cloudLoad(){
   var key=localStorage.getItem("ckey"),bin=localStorage.getItem("cbin");
   if(!key||!bin)return;
+  // Prevent concurrent loads
+  if(window._syncing)return;
+  window._syncing=true;
+  dot(true);
   try{
-    var r=await fetch("https://api.jsonbin.io/v3/b/"+bin+"/latest",{headers:{"X-Master-Key":key,"X-Bin-Meta":"false"}});
-    if(!r.ok)return;
+    var r=await fetch("https://api.jsonbin.io/v3/b/"+bin+"/latest",{
+      headers:{"X-Master-Key":key,"X-Bin-Meta":"false"},
+      cache:"no-store"
+    });
+    if(!r.ok){dot(false);window._syncing=false;return;}
     var d=await r.json();
     var serverTs=d._ts||0;
     var localTs=window._lastSyncTs||0;
-    if(d.tasks)S.tasks=d.tasks;
-    if(d.rewards)S.rewards=d.rewards;
+    // Always apply server data - server is source of truth
+    if(d.tasks&&d.tasks.length)S.tasks=d.tasks;
+    if(d.rewards&&d.rewards.length)S.rewards=d.rewards;
     if(d.done)S.done=d.done;
     if(d.history)S.history=d.history;
     if(d.monthDone)S.monthDone=d.monthDone;
-    if(d.negatives)S.negatives=d.negatives;
+    if(d.negatives&&d.negatives.length)S.negatives=d.negatives;
     if(d.negHistory)S.negHistory=d.negHistory;
-    if(d.agenda)S.agenda=d.agenda;
+    if(d.agenda&&d.agenda.length)S.agenda=d.agenda;
     if(d.agendaDone)S.agendaDone=d.agendaDone;
     if(d.notes)localStorage.setItem("christea_notes",JSON.stringify(d.notes));
     window._lastSyncTs=serverTs||Date.now();
     saveLocal();
-    render();
-    dot(false);
-  }catch(e){}
+    // Only re-render if data actually changed
+    if(serverTs>localTs||!localTs){render();}
+  }catch(e){console.log("Sync error:",e);}
+  dot(false);
+  window._syncing=false;
 }
 
 async function cloudSave(){
   var key=localStorage.getItem("ckey"),bin=localStorage.getItem("cbin");
   saveLocal();
   if(!key||!bin)return;
+  // Queue saves to avoid race conditions
+  window._saveQueue=(window._saveQueue||0)+1;
+  var myQueue=window._saveQueue;
   dot(true);
-  var notes=JSON.parse(localStorage.getItem("christea_notes")||"[]");
-  var payload=Object.assign({},S,{notes:notes,_ts:Date.now()});
-  try{await fetch("https://api.jsonbin.io/v3/b/"+bin,{method:"PUT",headers:{"Content-Type":"application/json","X-Master-Key":key},body:JSON.stringify(payload)});}catch(e){}
+  // Small delay to batch rapid changes
+  await new Promise(function(res){setTimeout(res,300);});
+  // Only proceed if we're the latest save request
+  if(myQueue!==window._saveQueue){dot(false);return;}
+  try{
+    var notes=JSON.parse(localStorage.getItem("christea_notes")||"[]");
+    var payload=Object.assign({},S,{notes:notes,_ts:Date.now()});
+    var r=await fetch("https://api.jsonbin.io/v3/b/"+bin,{
+      method:"PUT",
+      headers:{"Content-Type":"application/json","X-Master-Key":key},
+      body:JSON.stringify(payload)
+    });
+    if(r.ok){
+      window._lastSyncTs=payload._ts;
+      console.log("Saved at",new Date().toLocaleTimeString());
+    }
+  }catch(e){console.log("Save error:",e);}
   dot(false);
 }
 async function createBin(key){
@@ -474,6 +501,16 @@ function toggleTask(id){
   var dk=todayKey();
   if(!S.history[dk])S.history[dk]={};
   var wasDone=!!S.history[dk][id];
+  // If trying to UNMARK a done task, require master password
+  if(wasDone){
+    var masterPwd=localStorage.getItem("christea_pwd")||"1234";
+    var entered=prompt("Senha master para desmarcar tarefa:");
+    if(entered===null)return; // cancelled
+    if(entered!==masterPwd){
+      toast("Senha incorreta!");
+      return;
+    }
+  }
   S.history[dk][id]=!wasDone;
   S.done[id]=S.history[dk][id]; // keep in sync for legacy
   // Track monthly points
@@ -646,7 +683,15 @@ function render(){
   [["home","Inicio"],["tasks","Tarefas"],["agenda","Agenda"],["metas","Metas"],["recompensas","Premios"],["recados","Recados"],["negatives","Alertas"]].forEach(function(t){
     var isA=UI.tab===t[0];
     var tb=btn("flex-shrink:0;padding:10px 10px;border:none;background:none;font-weight:700;font-size:13px;color:"+(isA?ac:"#aaa")+";border-bottom:3px solid "+(isA?ac:"transparent")+";margin-bottom:-3px;white-space:nowrap","",function(tt){return function(){setTab(tt);};}(t[0]));
-    tb.textContent=t[1];
+    if(t[0]==="recados"){
+      var savedCount=parseInt(localStorage.getItem("christea_notes_read")||"0");
+      var totalNotes=0;try{totalNotes=JSON.parse(localStorage.getItem("christea_notes")||"[]").length;}catch(e){}
+      if(totalNotes>savedCount){
+        var nb=div("display:inline-block;background:#FF6B9D;color:white;font-size:9px;font-weight:800;padding:1px 5px;border-radius:999px;margin-left:3px;vertical-align:top");
+        nb.textContent=String(totalNotes-savedCount);
+        tb.textContent=t[1];tb.appendChild(nb);
+      } else {tb.textContent=t[1];}
+    } else {tb.textContent=t[1];}
     tabBar.appendChild(tb);
   });
   root.appendChild(tabBar);
@@ -1327,6 +1372,14 @@ function openCfg(){
   var info=div("font-size:12px;color:#888;font-weight:700;margin-bottom:12px");info.textContent="Para sincronizar entre celulares gratuitamente:";m.appendChild(info);
   var steps=div("background:#f8f8f8;border-radius:12px;padding:12px;margin-bottom:12px;font-size:11px;line-height:1.8;color:#666;font-weight:700");
   steps.innerHTML="1. Acesse <b>jsonbin.io</b><br>2. Sign Up (gratis)<br>3. API Keys - copie a Master Key<br>4. Cole abaixo e clique Conectar";
+
+  // Password section
+  addLabel(m,"Senha Master (para desmarcar tarefas)");
+  var pwdInp=inp("password",null,localStorage.getItem("christea_pwd")||"1234","Nova senha");
+  pwdInp.id="cfgpwd";m.appendChild(pwdInp);
+  var pwdHint=div("font-size:11px;color:#aaa;font-weight:700;margin-top:4px");
+  pwdHint.textContent="Padrao: 1234. Altere para proteger o app.";
+  m.appendChild(pwdHint);
   m.appendChild(steps);
   addLabel(m,"Master Key do JSONBin");
   var ki=inp("text",null,key,"$2a$10$...");ki.id="cfgk";m.appendChild(ki);
@@ -1344,11 +1397,13 @@ function openCfg(){
   br.appendChild(btn("flex:1;padding:11px;border-radius:12px;border:none;background:#f0f0f0;font-family:Nunito,sans-serif;font-weight:800;font-size:15px;color:#666","Fechar",function(){document.getElementById("cfg").remove();}));
   br.appendChild(btn("flex:1;padding:11px;border-radius:12px;border:none;background:linear-gradient(135deg,#ff6b9d,#c94080);color:white;font-family:Nunito,sans-serif;font-weight:800;font-size:14px","Conectar",async function(){
     var k=document.getElementById("cfgk").value.trim();if(!k){alert("Cole sua Master Key!");return;}
+    var newPwd=document.getElementById("cfgpwd").value.trim();
+    if(newPwd)localStorage.setItem("christea_pwd",newPwd);
     var manualBin=document.getElementById("cfgb").value.trim();
     localStorage.setItem("ckey",k);toast("Conectando...");
     var b=manualBin||localStorage.getItem("cbin");
     if(!b){try{b=await createBin(k);}catch(e){}}
-    if(b){localStorage.setItem("cbin",b);document.getElementById("cfg").remove();toast("Conectado! Bin: "+b);cloudLoad();setInterval(cloudLoad,15000);}
+    if(b){localStorage.setItem("cbin",b);document.getElementById("cfg").remove();toast("Conectado! Bin: "+b);cloudLoad();setInterval(cloudLoad,10000);}
     else toast("Erro! Verifique a key.");
   }));
   m.appendChild(br);
@@ -2040,91 +2095,94 @@ function buildNegatives(parent){
 
 // MONTHLY HISTORY
 function buildMonthly(parent){
-  // Build list of months from history keys
+  var now2=new Date();
+  var curYear=now2.getFullYear();
+  var curMonth=now2.getMonth(); // 0-based
+  var curMK2=curYear+"-"+String(curMonth+1).padStart(2,"0");
+  var MONTH_NAMES=["Janeiro","Fevereiro","Marco","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
+
+  var ttl=div("font-size:18px;color:#888;margin-bottom:12px");ttl.className="fr";ttl.textContent="Historico Mensal";
+  parent.appendChild(ttl);
+
+  // Group history by month - only count days within that calendar month
   var monthMap={};
-  Object.keys(S.history).forEach(function(dateKey){
-    var parts=dateKey.split("-");
-    if(parts.length<2)return;
-    var mk=parts[0]+"-"+parts[1];
-    if(!monthMap[mk])monthMap[mk]={vPts:0,pPts:0,vTasks:0,pTasks:0,days:0};
+  monthMap[curMK2]={vPts:0,pPts:0,vTasks:0,pTasks:0,days:0,daysSet:{}};
+
+  Object.keys(S.history).sort().forEach(function(dateKey){
+       // Validate date format
+    if(!dateKey||dateKey.length!==10||dateKey.charAt(4)!=='-'||dateKey.charAt(7)!=='-')return;
+    var d=new Date(dateKey+"T12:00:00");
+    if(isNaN(d.getTime()))return;
+    var y=d.getFullYear();
+    var m=d.getMonth();
+    var mk=y+"-"+String(m+1).padStart(2,"0");
+    // Skip future months
+    if(mk>curMK2)return;
+
     var dm=S.history[dateKey];
+    if(!dm||typeof dm!=="object")return;
+    // Only count if at least one task was done
+    var anyDone=Object.keys(dm).some(function(k){return dm[k]===true;});
+    if(!anyDone)return;
+
+    if(!monthMap[mk])monthMap[mk]={vPts:0,pPts:0,vTasks:0,pTasks:0,days:0,daysSet:{}};
+    // Count each calendar day only once
+    if(!monthMap[mk].daysSet[dateKey]){
+      monthMap[mk].daysSet[dateKey]=true;
+      monthMap[mk].days++;
+    }
+    var di=d.getDay();
     S.tasks.forEach(function(t){
       if(!dm[t.id])return;
-      if(t.who==="vit"||t.who==="both"){monthMap[mk].vPts+=t.pts;monthMap[mk].vTasks++;}
-      if(t.who==="ped"||t.who==="both"){monthMap[mk].pPts+=t.pts;monthMap[mk].pTasks++;}
+      if(!t.days||!t.days.includes(di))return;
+      if(t.who==="vit"||t.who==="both")monthMap[mk].vPts+=t.pts;
+      if(t.who==="ped"||t.who==="both")monthMap[mk].pPts+=t.pts;
+      if(t.who==="vit"||t.who==="both")monthMap[mk].vTasks++;
+      if(t.who==="ped"||t.who==="both")monthMap[mk].pTasks++;
     });
-    monthMap[mk].days++;
   });
 
   var months=Object.keys(monthMap).sort().reverse();
 
-  var ttl=div("font-size:18px;color:#888;margin-bottom:12px");ttl.className="fr";
-  ttl.textContent="Historico Mensal";
-  parent.appendChild(ttl);
-
-  if(months.length===0){
-    var empty=div("background:white;border-radius:20px;padding:30px;text-align:center;box-shadow:0 4px 20px rgba(0,0,0,.07)");
-    var ei=div("font-size:40px;margin-bottom:10px");ei.textContent="\uD83D\uDCC5";
-    var et=div("font-size:15px;color:#bbb;font-weight:700");et.textContent="Nenhum historico mensal ainda";
-    var es=div("font-size:12px;color:#ddd;font-weight:700;margin-top:6px");es.textContent="Os dados aparecerao aqui conforme o tempo passar";
-    empty.appendChild(ei);empty.appendChild(et);empty.appendChild(es);
-    parent.appendChild(empty);
-    return;
-  }
-
-  var MONTH_NAMES=["Janeiro","Fevereiro","Marco","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
-  var now=new Date();
-  var curMK=now.getFullYear()+"-"+String(now.getMonth()+1).padStart(2,"0");
-
   months.forEach(function(mk){
     var m=monthMap[mk];
     var parts=mk.split("-");
-    var year=parts[0]||"";
-    var monthNum=parseInt(parts[1]||"1")-1;
-    if(monthNum<0||monthNum>11)monthNum=0;
-    var label=MONTH_NAMES[monthNum]+" "+year;
-    var isCurrentMonth=(mk===curMK);
+    var mNum=parseInt(parts[1]||"1")-1;
+    if(mNum<0||mNum>11)mNum=0;
+    var label=MONTH_NAMES[mNum]+" "+parts[0];
+    var isCur=(mk===curMK2);
 
-    var card=div("background:white;border-radius:20px;padding:16px;margin-bottom:12px;box-shadow:0 4px 20px rgba(0,0,0,.07);border-left:4px solid "+(isCurrentMonth?"#667eea":"#e0e0e0"));
-
-    var hdr=div("display:flex;justify-content:space-between;align-items:center;margin-bottom:12px");
-    var lbl=div("font-size:16px;font-weight:800;color:#444");lbl.textContent=label;
-    if(isCurrentMonth){
-      var cur=div("font-size:10px;font-weight:800;color:white;background:#667eea;padding:3px 8px;border-radius:999px");
-      cur.textContent="Mes atual";hdr.appendChild(lbl);hdr.appendChild(cur);
-    } else {
-      hdr.appendChild(lbl);
+    var card=div("background:white;border-radius:20px;padding:16px;margin-bottom:12px;box-shadow:0 4px 20px rgba(0,0,0,.07);border-left:4px solid "+(isCur?"#667eea":"#e0e0e0"));
+    var hdr2=div("display:flex;justify-content:space-between;align-items:center;margin-bottom:12px");
+    var lbl2=div("font-size:16px;font-weight:800;color:#444");lbl2.textContent=label;
+    hdr2.appendChild(lbl2);
+    if(isCur){
+      var badge3=div("font-size:10px;font-weight:800;color:white;background:#667eea;padding:3px 8px;border-radius:999px");
+      badge3.textContent="Mes atual";hdr2.appendChild(badge3);
     }
-    card.appendChild(hdr);
+    card.appendChild(hdr2);
 
-    // Stats row
-    var srow=div("display:flex;gap:10px;margin-bottom:12px");
+    var srow=div("display:flex;gap:10px;margin-bottom:10px");
     [["Vitoria","#FF6B9D","#fff0f6",m.vPts,m.vTasks],["Pedro","#4ECDC4","#f0fffe",m.pPts,m.pTasks]].forEach(function(info){
       var cc=div("flex:1;background:"+info[2]+";border-radius:14px;padding:12px 8px;text-align:center");
       var cn=div("font-size:12px;font-weight:800;color:"+info[1]);cn.textContent=info[0];
-      var cpts=div("font-size:24px;color:"+info[1]);cpts.className="fr";cpts.textContent=String(info[3]);
+      var cpts=div("font-size:26px;color:"+info[1]);cpts.className="fr";cpts.textContent=String(info[3]);
       var cptsl=div("font-size:10px;color:#bbb;font-weight:700");cptsl.textContent="pontos";
-      var csep=div("width:30px;height:2px;background:"+info[1]+"33;margin:5px auto");
+      var sep2=div("width:30px;height:2px;background:"+info[1]+"33;margin:5px auto");
       var ctasks=div("font-size:13px;font-weight:800;color:"+info[1]);ctasks.textContent=info[4]+" tarefas";
-      cc.appendChild(cn);cc.appendChild(cpts);cc.appendChild(cptsl);cc.appendChild(csep);cc.appendChild(ctasks);
+      cc.appendChild(cn);cc.appendChild(cpts);cc.appendChild(cptsl);cc.appendChild(sep2);cc.appendChild(ctasks);
       srow.appendChild(cc);
     });
     card.appendChild(srow);
 
-    // Progress bar total
-    var totalPts=m.vPts+m.pPts;
-    var daysActive=m.days;
-    var footer=div("display:flex;justify-content:space-between;font-size:11px;font-weight:700;color:#aaa");
-    var fl=span("",""+daysActive+" dias com atividade");
-    var fr2=span("","Total: "+totalPts+" pts");
-    footer.appendChild(fl);footer.appendChild(fr2);
-    card.appendChild(footer);
-
+    var foot2=div("display:flex;justify-content:space-between;font-size:12px;font-weight:700;color:#aaa");
+    foot2.appendChild(span("",m.days+(m.days===1?" dia":" dias")+" com atividade"));
+    foot2.appendChild(span("","Total: "+(m.vPts+m.pPts)+" pts"));
+    card.appendChild(foot2);
     parent.appendChild(card);
   });
 }
 
-// TV RENDER
 function renderTV(){
   document.body.className="tv";
   var root=document.getElementById("root");
@@ -2228,165 +2286,187 @@ function setHist(key,di,label){UI.histDay={key:key,di:di,label:label};render();}
 
 // RECADOS
 function buildRecados(parent){
-  var notes = JSON.parse(localStorage.getItem("christea_notes")||"[]");
+  var notes=JSON.parse(localStorage.getItem("christea_notes")||"[]");
+  var unread=parseInt(localStorage.getItem("christea_notes_read")||"0");
+  var hasNew=notes.length>unread;
 
+  // Header
   var hdr=div("display:flex;justify-content:space-between;align-items:center;margin-bottom:14px");
-  var ttl=div("font-size:18px;color:#888");ttl.className="fr";ttl.textContent="Recados da Familia";
-  hdr.appendChild(ttl);parent.appendChild(hdr);
+  var htitle=div("font-size:18px;color:#888");htitle.className="fr";htitle.textContent="Recados da Familia";
+  if(hasNew){
+    var badge2=div("background:#FF6B9D;color:white;font-size:11px;font-weight:800;padding:3px 10px;border-radius:999px");
+    badge2.textContent=String(notes.length-unread)+" novo(s)";hdr.appendChild(htitle);hdr.appendChild(badge2);
+  } else {
+    hdr.appendChild(htitle);
+  }
+  // Mark as read
+  localStorage.setItem("christea_notes_read",String(notes.length));
+  parent.appendChild(hdr);
 
   // New note form
   var form=div("background:white;border-radius:20px;padding:16px;margin-bottom:16px;box-shadow:0 4px 20px rgba(0,0,0,.07)");
   var ftitle=div("font-size:14px;font-weight:800;color:#555;margin-bottom:10px");ftitle.textContent="Novo Recado";
-  
+
   // Author selector
   var authorRow=div("display:flex;gap:8px;margin-bottom:10px");
   var authors=[["Pai","#667eea"],["Mae","#FF6B9D"],["Vitoria","#FFB800"],["Pedro","#4ECDC4"]];
   var selAuthor="Pai";
   authors.forEach(function(a){
-    var ab=btn("flex:1;padding:6px 4px;border-radius:10px;border:2px solid "+(a[0]==="Pai"?a[1]:"#e0e0e0")+";background:"+(a[0]==="Pai"?a[1]:"white")+";color:"+(a[0]==="Pai"?"white":"#888")+";font-weight:800;font-size:12px",a[0],function(aa){return function(){
+    var isA=a[0]==="Pai";
+    var ab=btn("flex:1;padding:6px 4px;border-radius:10px;border:2px solid "+(isA?a[1]:"#e0e0e0")+";background:"+(isA?a[1]:"white")+";color:"+(isA?"white":"#888")+";font-weight:800;font-size:12px",a[0],function(aa){return function(e){
       selAuthor=aa[0];
       authorRow.querySelectorAll("button").forEach(function(x){x.style.background="white";x.style.color="#888";x.style.borderColor="#e0e0e0";});
-      event.target.style.background=aa[1];event.target.style.color="white";event.target.style.borderColor=aa[1];
+      e.currentTarget.style.background=aa[1];e.currentTarget.style.color="white";e.currentTarget.style.borderColor=aa[1];
     };}(a));
     authorRow.appendChild(ab);
   });
 
   var ta=document.createElement("textarea");
-  ta.placeholder="Escreva um recado, observacao ou lembrança...";
-  ta.style.cssText="width:100%;padding:10px 12px;border-radius:12px;border:2px solid #e8e8e8;font-family:Nunito,sans-serif;font-size:14px;font-weight:700;outline:none;resize:none;height:80px;margin-bottom:10px";
-  
+  ta.placeholder="Escreva um recado, observacao ou lembranca...";
+  ta.style.cssText="width:100%;padding:10px 12px;border-radius:12px;border:2px solid #e8e8e8;font-family:Nunito,sans-serif;font-size:14px;font-weight:700;outline:none;resize:none;height:70px;margin-bottom:10px;display:block";
+
+  // Media buttons row
+  var mediaRow=div("display:flex;gap:8px;margin-bottom:10px;align-items:center");
+  var mediaLabel=div("font-size:12px;font-weight:700;color:#aaa");mediaLabel.textContent="Anexar:";
+  mediaRow.appendChild(mediaLabel);
+
+  // Photo button
+  var photoInput=document.createElement("input");
+  photoInput.type="file";photoInput.accept="image/*";photoInput.capture="environment";
+  photoInput.style.display="none";
+  var photoBtn=btn("padding:6px 12px;border-radius:10px;border:2px solid #e0e0e0;background:white;font-weight:800;font-size:13px","\uD83D\uDCF7 Foto",function(){photoInput.click();});
+  var photoPreview=div("font-size:12px;color:#4CAF50;font-weight:700;display:none");photoPreview.textContent="Foto selecionada!";
+  var photoData=null;
+  photoInput.onchange=function(){
+    if(photoInput.files&&photoInput.files[0]){
+      var reader=new FileReader();
+      reader.onload=function(e2){
+        photoData=e2.target.result;
+        photoPreview.style.display="block";
+        photoBtn.style.borderColor="#4CAF50";
+        photoBtn.style.color="#4CAF50";
+      };
+      reader.readAsDataURL(photoInput.files[0]);
+    }
+  };
+
+  // Audio button
+  var audioBtn=btn("padding:6px 12px;border-radius:10px;border:2px solid #e0e0e0;background:white;font-weight:800;font-size:13px","\uD83C\uDFA4 Audio",function(){
+    if(window._isRecording){
+      // Stop recording
+      window._mediaRecorder&&window._mediaRecorder.stop();
+      window._isRecording=false;
+      audioBtn.textContent="\uD83C\uDFA4 Audio";
+      audioBtn.style.borderColor="#e0e0e0";
+    } else {
+      // Start recording
+      navigator.mediaDevices&&navigator.mediaDevices.getUserMedia({audio:true}).then(function(stream){
+        window._isRecording=true;
+        audioBtn.textContent="\u23F9 Parar";audioBtn.style.borderColor="#e44";
+        var chunks=[];
+        window._mediaRecorder=new MediaRecorder(stream);
+        window._mediaRecorder.ondataavailable=function(ev){chunks.push(ev.data);};
+        window._mediaRecorder.onstop=function(){
+          var blob=new Blob(chunks,{type:"audio/webm"});
+          var reader=new FileReader();
+          reader.onload=function(e2){
+            window._audioData=e2.target.result;
+            audioPreview.style.display="block";
+            audioBtn.textContent="\uD83C\uDFA4 Audio";audioBtn.style.borderColor="#4CAF50";
+          };
+          reader.readAsDataURL(blob);
+          stream.getTracks().forEach(function(t){t.stop();});
+        };
+        window._mediaRecorder.start();
+      }).catch(function(){toast("Permissao de microfone negada");});
+    }
+  });
+  var audioPreview=div("font-size:12px;color:#4CAF50;font-weight:700;display:none");audioPreview.textContent="\uD83C\uDFA4 Audio gravado!";
+
+  mediaRow.appendChild(photoBtn);mediaRow.appendChild(photoInput);
+  mediaRow.appendChild(audioBtn);
+  var mediaPreviews=div("display:flex;flex-wrap:wrap;gap:6px;margin-top:4px");
+  mediaPreviews.appendChild(photoPreview);mediaPreviews.appendChild(audioPreview);
+
   var sendBtn=btn("width:100%;padding:11px;border-radius:12px;border:none;background:linear-gradient(135deg,#ff6b9d,#c94080);color:white;font-family:Nunito,sans-serif;font-weight:800;font-size:14px","Enviar Recado",function(){
     var text=ta.value.trim();
-    if(!text)return;
-    var note={id:Date.now(),author:selAuthor,text:text,date:new Date().toLocaleDateString("pt-BR",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})};
+    if(!text&&!photoData&&!window._audioData){toast("Escreva algo ou anexe uma midia!");return;}
+    var note={
+      id:Date.now(),
+      author:selAuthor,
+      text:text,
+      photo:photoData||null,
+      audio:window._audioData||null,
+      date:new Date().toLocaleDateString("pt-BR",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})
+    };
     notes.unshift(note);
     localStorage.setItem("christea_notes",JSON.stringify(notes.slice(0,50)));
-    ta.value="";
-    toast("Recado enviado!");
-    cloudSave();render();
+    localStorage.setItem("christea_notes_read",String(notes.length));
+    ta.value="";photoData=null;window._audioData=null;
+    photoPreview.style.display="none";audioPreview.style.display="none";
+    photoBtn.style.borderColor="#e0e0e0";photoBtn.style.color="";
+    toast("Recado enviado!");cloudSave();render();
   });
 
-  form.appendChild(ftitle);form.appendChild(authorRow);form.appendChild(ta);form.appendChild(sendBtn);
+  form.appendChild(ftitle);form.appendChild(authorRow);form.appendChild(ta);
+  form.appendChild(mediaRow);form.appendChild(mediaPreviews);form.appendChild(sendBtn);
   parent.appendChild(form);
 
   // Notes list
   if(notes.length===0){
     var empty=div("text-align:center;padding:30px;color:#bbb;font-weight:700;font-size:15px");
-    empty.textContent="Nenhum recado ainda. Seja o primeiro!";
-    parent.appendChild(empty);
-    return;
+    empty.textContent="Nenhum recado ainda!";parent.appendChild(empty);return;
   }
 
-  notes.forEach(function(n){
+  notes.forEach(function(n,idx2){
     var authorColors={"Pai":"#667eea","Mae":"#FF6B9D","Vitoria":"#FFB800","Pedro":"#4ECDC4"};
-    var authorEmojis={"Pai":"👨","Mae":"👩","Vitoria":"👸","Pedro":"🦸"};
+    var authorEmojis={"Pai":"\uD83D\uDC68","Mae":"\uD83D\uDC69","Vitoria":"\uD83D\uDC78","Pedro":"\uD83E\uDDB8"};
     var color=authorColors[n.author]||"#888";
     var card=div("background:white;border-radius:16px;padding:14px;margin-bottom:10px;box-shadow:0 3px 14px rgba(0,0,0,.06);border-left:4px solid "+color);
     var top=div("display:flex;justify-content:space-between;align-items:center;margin-bottom:8px");
     var auth=div("display:flex;align-items:center;gap:6px");
-    var emoji=span("font-size:18px",authorEmojis[n.author]||"👤");
-    var aname=div("font-weight:800;font-size:15px;color:"+color);aname.textContent=n.author;
-    var delBtn=btn("background:none;border:none;color:#ddd;font-size:14px;padding:2px 4px","✕",function(nid){return function(){
+    var emoji=span("font-size:18px",authorEmojis[n.author]||"\uD83D\uDC64");
+    var aname=div("font-weight:800;font-size:14px;color:"+color);aname.textContent=n.author;
+    auth.appendChild(emoji);auth.appendChild(aname);
+    var delBtn=btn("background:none;border:none;color:#ddd;font-size:14px;padding:2px 4px","\u2715",function(nid){return function(){
       var notes2=JSON.parse(localStorage.getItem("christea_notes")||"[]");
       notes2=notes2.filter(function(x){return x.id!==nid;});
       localStorage.setItem("christea_notes",JSON.stringify(notes2));
       toast("Recado removido!");cloudSave();render();
     };}(n.id));
     var dt=div("font-size:10px;color:#bbb;font-weight:700");dt.textContent=n.date;
-    auth.appendChild(emoji);auth.appendChild(aname);
     top.appendChild(auth);top.appendChild(delBtn);
-    var txt=div("font-size:15px;color:#444;font-weight:600;line-height:1.5");txt.textContent=n.text;
-    var bot=div("margin-top:6px");bot.appendChild(dt);
-    card.appendChild(top);card.appendChild(txt);card.appendChild(bot);
+    var bot=div("margin-top:4px");bot.appendChild(dt);
+
+    if(n.text){
+      var txt=div("font-size:14px;color:#444;font-weight:600;line-height:1.5;margin-bottom:8px");txt.textContent=n.text;
+      card.appendChild(top);card.appendChild(txt);
+    } else {
+      card.appendChild(top);
+    }
+
+    // Photo preview
+    if(n.photo){
+      var pimg=document.createElement("img");
+      pimg.src=n.photo;
+      pimg.style.cssText="width:100%;max-height:200px;object-fit:cover;border-radius:10px;margin-bottom:8px;cursor:pointer";
+      pimg.onclick=function(src2){return function(){window.open(src2,"_blank");};}(n.photo);
+      card.appendChild(pimg);
+    }
+
+    // Audio player
+    if(n.audio){
+      var aud=document.createElement("audio");
+      aud.src=n.audio;aud.controls=true;
+      aud.style.cssText="width:100%;margin-bottom:8px";
+      card.appendChild(aud);
+    }
+
+    card.appendChild(bot);
     parent.appendChild(card);
   });
 }
 
-checkMonthReset();
-// GENERATE APP ICON via Canvas
-(function(){
-  try {
-    var c = document.createElement("canvas");
-    c.width = 192; c.height = 192;
-    var ctx = c.getContext("2d");
-    // Gradient background
-    var g = ctx.createLinearGradient(0,0,0,192);
-    g.addColorStop(0,"#FF6B9D");
-    g.addColorStop(1,"#c94080");
-    // Rounded rect
-    ctx.beginPath();
-    ctx.moveTo(30,0);ctx.lineTo(162,0);
-    ctx.quadraticCurveTo(192,0,192,30);
-    ctx.lineTo(192,162);
-    ctx.quadraticCurveTo(192,192,162,192);
-    ctx.lineTo(30,192);
-    ctx.quadraticCurveTo(0,192,0,162);
-    ctx.lineTo(0,30);
-    ctx.quadraticCurveTo(0,0,30,0);
-    ctx.closePath();
-    ctx.fillStyle=g;ctx.fill();
-    // Trophy emoji
-    ctx.font="110px serif";
-    ctx.textAlign="center";
-    ctx.textBaseline="middle";
-    ctx.fillText("\uD83C\uDFC6",96,90);
-    // Stars below
-    ctx.font="28px serif";
-    ctx.fillText("\u2B50\u2B50\u2B50",96,158);
-    // Set as apple touch icon
-    var url = c.toDataURL("image/png");
-    var link = document.querySelector("link[rel='apple-touch-icon']");
-    if(link) link.href = url;
-    // Also set favicon
-    var fav = document.querySelector("link[rel='icon']");
-    var fav2 = document.createElement("link");
-    fav2.rel="shortcut icon"; fav2.href=url;
-    document.head.appendChild(fav2);
-  } catch(e){}
-})();
-
-// INIT - wrapped in DOMContentLoaded to ensure all functions are defined
-window.addEventListener("DOMContentLoaded", function(){
-  loadLocal();
-  var _tvP=new URLSearchParams(window.location.search);
-  window._tvMode=_tvP.get("tv")==="1";
-  if(window._tvMode){
-    renderTV();
-    setInterval(function(){cloudLoad();setTimeout(renderTV,500);},30000);
-  } else {
-    render();
-    startAgendaTimer();
-  }
-  // SW and notifications with safety check
-  if("serviceWorker" in navigator){
-    registerServiceWorker();
-  }
-  if("Notification" in window && Notification.permission !== "denied"){
-    requestNotificationPermission();
-  }
-  setTimeout(function(){
-    scheduleAgendaNotifications();
-  }, 2500);
-
-  // Sync when app comes back to foreground
-  document.addEventListener("visibilitychange", function(){
-    if(!document.hidden){
-      cloudLoad();
-    }
-  });
-
-  // Sync when window gets focus
-  window.addEventListener("focus", function(){
-    cloudLoad();
-  });
-
-  // Sync on page show (when returning from background on mobile)
-  window.addEventListener("pageshow", function(){
-    cloudLoad();
-  });
-});
-
-// ── SERVICE WORKER + PUSH NOTIFICATIONS ──────────────────────
 function requestNotificationPermission(){
   if(!("Notification" in window))return;
   if(Notification.permission==="default"){
@@ -2424,6 +2504,56 @@ function registerServiceWorker(){
     .catch(function(err){ console.log("SW error:", err); });
   }catch(e){ console.log("SW exception:", e); }
 }
+
+// INIT
+window.addEventListener("DOMContentLoaded", function(){
+  loadLocal();
+  var _tvP = new URLSearchParams(window.location.search);
+  window._tvMode = _tvP.get("tv") === "1";
+  if(window._tvMode){
+    renderTV();
+    setInterval(function(){ cloudLoad(); setTimeout(renderTV, 500); }, 30000);
+  } else {
+    render();
+    startAgendaTimer();
+    if("serviceWorker" in navigator && navigator.serviceWorker){
+      registerServiceWorker();
+    }
+    if("Notification" in window && Notification.permission !== "denied"){
+      requestNotificationPermission();
+    }
+    setTimeout(function(){ scheduleAgendaNotifications(); }, 2500);
+  }
+  // Sync on visibility change
+  document.addEventListener("visibilitychange", function(){
+    if(!document.hidden) cloudLoad();
+  });
+  window.addEventListener("focus", function(){ cloudLoad(); });
+  window.addEventListener("pageshow", function(){ cloudLoad(); });
+  // Orientation change
+  window.addEventListener("orientationchange", function(){
+    setTimeout(function(){ render(); }, 300);
+  });
+  window.addEventListener("resize", function(){
+    clearTimeout(window._resizeTimer);
+    window._resizeTimer = setTimeout(function(){ render(); }, 200);
+  });
+  // Handle URL params from notification
+  var _p = new URLSearchParams(window.location.search);
+  var _na = _p.get("na"), _aid = _p.get("aid"), _nt = _p.get("nt");
+  if(_na && _aid){
+    setTimeout(function(){
+      handleNotificationAction(_na, {agendaId:parseInt(_aid), notifType:_nt, origin:window.location.origin});
+    }, 1500);
+  }
+  // Start sync interval
+  if(localStorage.getItem("ckey") && localStorage.getItem("cbin")){
+    cloudLoad();
+    setInterval(cloudLoad, 15000);
+  }
+  // Check month/day reset
+  checkMonthReset();
+});
 </script>
 </body>
 </html>
