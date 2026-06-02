@@ -513,6 +513,38 @@ function showBanner(msg, color){
   },4000);
 }
 
+function showPwdModal(callback){
+  var m=makeModal("pwdm");
+  var title=div("font-size:18px;margin-bottom:16px;color:#333");title.className="fr";
+  title.textContent="\uD83D\uDD12 Senha Master";
+  m.appendChild(title);
+  var hint=div("font-size:13px;color:#888;font-weight:700;margin-bottom:12px");
+  hint.textContent="Digite a senha para desmarcar esta tarefa";
+  m.appendChild(hint);
+  var pi=document.createElement("input");
+  pi.type="password";pi.placeholder="Senha...";
+  pi.style.cssText="width:100%;padding:12px;border-radius:12px;border:2px solid #e0e0e0;font-family:Nunito,sans-serif;font-size:16px;font-weight:700;outline:none;text-align:center;letter-spacing:4px";
+  m.appendChild(pi);
+  var errMsg=div("font-size:12px;color:#e44;font-weight:700;margin-top:8px;text-align:center;min-height:16px");
+  m.appendChild(errMsg);
+  var br=div("display:flex;gap:10px;margin-top:16px");
+  br.appendChild(btn("flex:1;padding:12px;border-radius:12px;border:none;background:#f0f0f0;font-family:Nunito,sans-serif;font-weight:800;font-size:14px;color:#666","Cancelar",function(){
+    document.getElementById("pwdm").remove();callback(false);
+  }));
+  br.appendChild(btn("flex:1;padding:12px;border-radius:12px;border:none;background:linear-gradient(135deg,#667eea,#764ba2);color:white;font-family:Nunito,sans-serif;font-weight:800;font-size:14px","Confirmar",function(){
+    var entered=pi.value;
+    var masterPwd=localStorage.getItem("christea_pwd")||"1234";
+    if(entered===masterPwd){
+      document.getElementById("pwdm").remove();callback(true);
+    } else {
+      errMsg.textContent="Senha incorreta! Tente novamente.";
+      pi.value="";pi.focus();
+    }
+  }));
+  m.appendChild(br);
+  setTimeout(function(){pi.focus();},300);
+}
+
 function toast(msg){var t=document.getElementById("toast");t.textContent=msg;t.classList.add("show");setTimeout(function(){t.classList.remove("show");},2500);}
 
 function toggleTask(id){
@@ -523,17 +555,19 @@ function toggleTask(id){
   var wasDone=!!S.history[dk][id];
   // If trying to UNMARK a done task, require master password
   if(wasDone){
-    var masterPwd=localStorage.getItem("christea_pwd")||"1234";
-    var entered=prompt("Senha master para desmarcar tarefa:");
-    if(entered===null)return; // cancelled
-    if(entered!==masterPwd){
-      toast("Senha incorreta!");
-      return;
-    }
+    showPwdModal(function(ok){
+      if(!ok)return;
+      S.history[dk][id]=false;
+      S.done[id]=false;
+      S.monthDone[id]=Math.max(0,(S.monthDone[id]||t.pts)-t.pts);
+      cloudSave();render();
+      toast("Tarefa desmarcada!");
+    });
+    return; // password modal handles the rest
   }
-  S.history[dk][id]=!wasDone;
-  S.done[id]=S.history[dk][id]; // keep in sync for legacy
-  // Track monthly points
+  // Only reaches here when MARKING (not unmarking - that's handled by password modal)
+  S.history[dk][id]=true;
+  S.done[id]=true;
   if(!S.monthDone)S.monthDone={};
   if(!S.negHistory)S.negHistory={};
   if(!S.negatives||!S.negatives.length)S.negatives=[
@@ -546,13 +580,10 @@ function toggleTask(id){
     {id:107,name:"Nao usar blusa no frio",icon:"\uD83E\uDDE5",who:"both",pts:5},
     {id:108,name:"Birra ou choro sem motivo",icon:"\uD83D\uDE22",who:"ped",pts:8}
   ];
-  if(S.history[dk][id]){
-    S.monthDone[id]=(S.monthDone[id]||0)+t.pts;
-    playSound("task");
-    toast("+"+t.pts+" pts  "+t.name);
-  } else {
-    S.monthDone[id]=Math.max(0,(S.monthDone[id]||t.pts)-t.pts);
-  }
+  // Always marking here (unmarking handled by password modal)
+  S.monthDone[id]=(S.monthDone[id]||0)+t.pts;
+  playSound("task");
+  toast("+"+t.pts+" pts  "+t.name);
   cloudSave();render();
 }
 
